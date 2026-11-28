@@ -81,7 +81,10 @@ fn parse_dhcp_options(options: &[u8]) -> Option<(DhcpMessageType, Option<String>
                 message_type = Some(parse_message_type(opt_data[0]));
             }
             DHCP_OPT_HOSTNAME => {
-                if let Ok(name) = std::str::from_utf8(opt_data) {
+                // RFC 2132 section 2: receivers must drop trailing NULs, which
+                // Windows clients send on the host name.
+                let end = opt_data.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+                if let Ok(name) = std::str::from_utf8(&opt_data[..end]) {
                     hostname = Some(name.to_string());
                 }
             }
@@ -174,6 +177,20 @@ mod tests {
             let packet = build_dhcp_packet(1, None, &mac);
             let info = analyze_dhcp(&packet).expect("valid DHCP message");
             assert_eq!(info.client_mac.as_deref(), Some(expected), "{mac:?}");
+        }
+    }
+
+    #[test]
+    fn test_dhcp_hostname_trailing_nuls_dropped() {
+        let mac = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        for (raw, expected) in [
+            ("DESKTOP-ABC\0", "DESKTOP-ABC"),
+            ("printer\0\0", "printer"),
+            ("\0", ""),
+        ] {
+            let packet = build_dhcp_packet(3, Some(raw), &mac);
+            let info = analyze_dhcp(&packet).expect("valid DHCP message");
+            assert_eq!(info.hostname.as_deref(), Some(expected), "{raw:?}");
         }
     }
 
